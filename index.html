@@ -1,0 +1,137 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>Online Clicker Race</title>
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<style>
+  body { font-family: Arial, sans-serif; background:#f4f7fb; color:#111; display:flex; align-items:center; justify-content:center; height:100vh; margin:0; }
+  .card { width:360px; background:#fff; border-radius:10px; box-shadow:0 6px 18px rgba(0,0,0,0.08); padding:18px; }
+  h1 { font-size:20px; margin:0 0 12px; color:#0b4a8f; }
+  #timer { font-size:28px; font-weight:700; color:#0b4a8f; text-align:center; margin-bottom:12px; }
+  #score { font-size:18px; margin-bottom:12px; text-align:center; }
+  button#clickBtn { width:100%; padding:18px; font-size:22px; border-radius:10px; background:#0b4a8f; color:#fff; border:none; cursor:pointer; box-shadow:0 6px 12px rgba(11,74,143,0.25); }
+  button#clickBtn:active { transform:translateY(2px); }
+  .players { margin-top:14px; }
+  .player { display:flex; justify-content:space-between; padding:6px 0; border-bottom:1px solid #eee; font-size:14px; }
+  .controls { display:flex; gap:8px; margin-top:10px; }
+  input#nick { flex:1; padding:8px; border-radius:6px; border:1px solid #ddd; }
+  button#setNick { padding:8px 10px; border-radius:6px; border:none; background:#2c6fcf; color:#fff; cursor:pointer; }
+  button#startBtn { padding:8px 10px; border-radius:6px; border:none; background:#0b4a8f; color:#fff; cursor:pointer; }
+  .floating { position:relative; }
+  .plus { position:absolute; left:50%; top:-12px; transform:translateX(-50%); color:green; font-weight:700; animation:floatUp 700ms ease-out; }
+  @keyframes floatUp { from {opacity:1; transform:translate(-50%,0)} to {opacity:0; transform:translate(-50,-40px)} }
+  .winner { text-align:center; font-weight:700; color:#0b4a8f; margin-top:8px; }
+  .footer { text-align:center; font-size:12px; color:#888; margin-top:8px; }
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>Online Clicker Race</h1>
+  <div id="timer">Waiting...</div>
+  <div id="score">Your score: <span id="myScore">0</span></div>
+  <div class="floating"><button id="clickBtn">Click!</button></div>
+
+  <div class="controls">
+    <input id="nick" placeholder="Enter nickname" />
+    <button id="setNick">Set</button>
+    <button id="startBtn">Start</button>
+  </div>
+
+  <div class="players">
+    <h3 style="margin:10px 0 6px; font-size:14px">Players</h3>
+    <div id="playersList"></div>
+  </div>
+
+  <div class="winner" id="winnerNotice"></div>
+  <div class="footer">Round length: 30s • Auto-restarts</div>
+</div>
+
+<script>
+  const urlParams = new URLSearchParams(window.location.search);
+  const nameParam = urlParams.get('name');
+  const ws = new WebSocket('ws://' + window.location.hostname + ':8080' + (nameParam ? '?name='+encodeURIComponent(nameParam) : ''));
+
+  let myId = null;
+  let myName = nameParam || null;
+  let myScore = 0;
+  let players = [];
+  let timeLeft = 0;
+
+  const timerEl = document.getElementById('timer');
+  const myScoreEl = document.getElementById('myScore');
+  const playersListEl = document.getElementById('playersList');
+  const clickBtn = document.getElementById('clickBtn');
+  const nickInput = document.getElementById('nick');
+  const setNickBtn = document.getElementById('setNick');
+  const startBtn = document.getElementById('startBtn');
+  const winnerNotice = document.getElementById('winnerNotice');
+  const floating = document.querySelector('.floating');
+
+  function renderPlayers() {
+    playersListEl.innerHTML = '';
+    players.sort((a,b)=>b.score - a.score);
+    for (const p of players) {
+      const div = document.createElement('div');
+      div.className = 'player';
+      div.innerHTML = `<div>${p.name}${p.id===myId ? ' (you)' : ''}</div><div>${p.score}</div>`;
+      playersListEl.appendChild(div);
+    }
+  }
+
+  ws.addEventListener('open', ()=> {
+    if (myName) ws.send(JSON.stringify({ type: 'set_name', name: myName }));
+  });
+
+  ws.addEventListener('message', (ev) => {
+    const msg = JSON.parse(ev.data);
+    if (msg.type === 'assign_id') {
+      myId = msg.id;
+      if (!myName) { myName = msg.name; nickInput.value = myName; }
+    } else if (msg.type === 'state') {
+      players = msg.players;
+      timeLeft = msg.timeLeft;
+      const me = players.find(p=>p.id===myId);
+      myScore = me ? me.score : 0;
+      myScoreEl.textContent = myScore;
+      timerEl.textContent = timeLeft > 0 ? `${timeLeft}s` : 'Starting...';
+      renderPlayers();
+      winnerNotice.textContent = '';
+    } else if (msg.type === 'game_over') {
+      if (Array.isArray(msg.winner)) {
+        winnerNotice.textContent = msg.winner.length ? 'Winners: ' + msg.winner.join(', ') : 'No winner';
+      } else {
+        winnerNotice.textContent = 'Winner: ' + msg.winner;
+      }
+      if (msg.scores) {
+        players = players.map(p => ({ ...p, score: msg.scores[p.name] ?? p.score }));
+        renderPlayers();
+      }
+    } else if (msg.type === 'round_start') {
+      timerEl.textContent = msg.timeLeft + 's';
+      winnerNotice.textContent = '';
+    }
+  });
+
+  clickBtn.addEventListener('click', () => {
+    ws.send(JSON.stringify({ type: 'click' }));
+    const plus = document.createElement('div');
+    plus.className = 'plus';
+    plus.textContent = '+1';
+    floating.appendChild(plus);
+    setTimeout(()=> floating.removeChild(plus), 700);
+  });
+
+  setNickBtn.addEventListener('click', () => {
+    const v = nickInput.value.trim();
+    if (!v) return;
+    myName = v;
+    ws.send(JSON.stringify({ type: 'set_name', name: myName }));
+  });
+
+  startBtn.addEventListener('click', () => {
+    ws.send(JSON.stringify({ type: 'start' }));
+  });
+</script>
+</body>
+</html>
